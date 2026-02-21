@@ -123,6 +123,10 @@ void EveryMillisecond(void) {
 				P0 &= ~0b00100000;
 				P0 &= ~0b01000000;
 			break;
+			case MODE_M0110A:
+				// green
+				P0 &= ~0b00100000;
+			break;
 		}
 
 #else
@@ -150,7 +154,7 @@ void EveryMillisecond(void) {
 					T3_FIFO_H = 0;
 				break;
 				case MODE_M0110A:
-					// green-ish
+					// green
 					SetPWM2Dat(0x30);
 				break;
 
