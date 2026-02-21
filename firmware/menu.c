@@ -480,7 +480,7 @@ void inputProcess(void)
             {
                 // cycle through modes on unpress of button
                 HMSettings.KeyboardMode++;
-                if (HMSettings.KeyboardMode > 2)
+                if (HMSettings.KeyboardMode > 3)
                     HMSettings.KeyboardMode = 0;
                 SyncSettings();
                 ports[PORT_KEY].state = S_INIT;

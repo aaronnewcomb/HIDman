@@ -16,6 +16,7 @@
 #include "keyboardled.h"
 #include "dataflash.h"
 #include "settings.h"
+#include "m0110a.h"
 #include "system.h"
 
 uint8_t UsbUpdateCounter = 0;
@@ -148,6 +149,10 @@ void EveryMillisecond(void) {
 					T3_FIFO_L = 0x3F;
 					T3_FIFO_H = 0;
 				break;
+				case MODE_M0110A:
+					// green-ish
+					SetPWM2Dat(0x30);
+				break;
 
 			}
 #endif
@@ -174,6 +179,10 @@ void mTimer0Interrupt(void) __interrupt(INT_NO_TMR0)
 
 			case (MODE_AMSTRAD):
 				AmstradProcessPort();
+				break;
+
+			case (MODE_M0110A):
+				M0110AProcessPort();
 				break;
 		}
 
@@ -229,6 +238,7 @@ int main(void)
 	InitPWM();
 
 	InitPS2Ports();
+	M0110AInit();
 
 	// timer0 setup
 	TMOD = (TMOD & 0xf0) | 0x02; // mode 1 (8bit auto reload)

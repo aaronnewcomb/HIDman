@@ -17,6 +17,7 @@
 #include "system.h"
 #include "scancode.h"
 #include "usbdef.h"
+#include "m0110a.h"
 
 // repeatState -
 // if positive, we're delaying - count up to repeatDelay then go negative
@@ -91,7 +92,10 @@ void HandleRepeats(void)
 	}
 	else if (RepeatState < RepeatRate)
 	{
-		SendKeyboard( (__code uint8_t *)(FlashSettings->KeyboardMode == MODE_PS2 ? HIDtoSET2_Make[RepeatKey] : HIDtoSET1_Make[RepeatKey]));
+		if (FlashSettings->KeyboardMode == MODE_M0110A)
+			M0110AEnqueueHidEvent(RepeatKey, false, false);
+		else
+			SendKeyboard((__code uint8_t *)(FlashSettings->KeyboardMode == MODE_PS2 ? HIDtoSET2_Make[RepeatKey] : HIDtoSET1_Make[RepeatKey]));
 		SetRepeatState(-1);
 	}
 }
@@ -496,7 +500,15 @@ bool ParseReport(__xdata INTERFACE *interface, uint32_t len, __xdata uint8_t *re
 
 								// media keys work different
 								// lookup a sparse table
-								if (descReport->appUsagePage == 0x0C) {
+								if (FlashSettings->KeyboardMode == MODE_M0110A) {
+									M0110AEnqueueHidEvent(hidcode, false, descReport->appUsagePage == 0x0C);
+									if (descReport->appUsagePage != 0x0C && !(hidcode >= 0xE0 && hidcode <= 0xE7))
+									{
+										RepeatKey = hidcode;
+										SetRepeatState(1);
+									}
+								}
+								else if (descReport->appUsagePage == 0x0C) {
 
 									__code EXTCHARLOOKUP *currpnt = FlashSettings->KeyboardMode == MODE_PS2 ? HID0CtoSET2_Make : HID0CtoSET1_Make;
 
@@ -531,7 +543,15 @@ bool ParseReport(__xdata INTERFACE *interface, uint32_t len, __xdata uint8_t *re
 								//DEBUGOUT("\nBreakn %x\n", hidcode);
 								// media keys work different
 								// lookup a sparse table
-								if (descReport->appUsagePage == 0x0C) {
+								if (FlashSettings->KeyboardMode == MODE_M0110A) {
+									if (hidcode == RepeatKey)
+									{
+										RepeatKey = 0;
+										SetRepeatState(0);
+									}
+									M0110AEnqueueHidEvent(hidcode, true, descReport->appUsagePage == 0x0C);
+								}
+								else if (descReport->appUsagePage == 0x0C) {
 
 									__code EXTCHARLOOKUP *currpnt = FlashSettings->KeyboardMode == MODE_PS2 ? HID0CtoSET2_Break : HID0CtoSET1_Break;
 

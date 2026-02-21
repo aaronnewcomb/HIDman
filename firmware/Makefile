@@ -44,7 +44,8 @@ $(OBJDIR)/scancode.rel \
 $(OBJDIR)/usbdata.rel \
 $(OBJDIR)/processreport.rel \
 $(OBJDIR)/delay.rel \
-$(OBJDIR)/xt.rel
+$(OBJDIR)/xt.rel \
+$(OBJDIR)/m0110a.rel
 
 ifneq ($(BOARD_TYPE), BOARD_MICRO)
 	COMMON += $(OBJDIR)/uart.rel
