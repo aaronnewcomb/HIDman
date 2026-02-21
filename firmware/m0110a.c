@@ -1,9 +1,31 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include <string.h>
 #include "m0110a.h"
 #include "ps2.h"
-#include "ch559.h"
+
+// 60kHz timer tick ~= 16.67us
+#define M0110A_TICKS_40US   2
+#define M0110A_TICKS_80US   5
+#define M0110A_TICKS_160US 10
+#define M0110A_TICKS_170US 10
+#define M0110A_TICKS_180US 11
+#define M0110A_TICKS_220US 13
+
+#define M0110A_CMD_INQUIRY 0x10
+#define M0110A_CMD_INSTANT 0x12
+#define M0110A_CMD_MODEL   0x14
+#define M0110A_CMD_TEST    0x16
+
+#define M0110A_RESP_NULL      0x7B
+#define M0110A_RESP_TEST_ACK  0x7D
+#define M0110A_RESP_TEST_NAK  0x77
+#define M0110A_MODEL_M0110A   0x0B
+
+#define M0110A_QUEUE_SIZE 32
+
+static __xdata uint8_t q[M0110A_QUEUE_SIZE];
+static __xdata uint8_t qHead = 0;
+static __xdata uint8_t qTail = 0;
 
 static uint8_t HidToM0110AScan(uint8_t hid)
 {
@@ -51,46 +73,186 @@ static uint8_t HidToM0110AScan(uint8_t hid)
     }
 }
 
-#define M0110A_QUEUE_SIZE 32
-static __xdata uint8_t q[M0110A_QUEUE_SIZE];
-static __xdata uint8_t qHead = 0;
-static __xdata uint8_t qTail = 0;
-
 static void enqueueRaw(uint8_t raw)
 {
     uint8_t next = (qHead + 1) & (M0110A_QUEUE_SIZE - 1);
-    if (next == qTail) return; // drop on overflow for now
+    if (next == qTail) return;
     q[qHead] = raw;
     qHead = next;
+}
+
+static bool dequeueRaw(uint8_t *out)
+{
+    if (qHead == qTail) return false;
+    *out = q[qTail];
+    qTail = (qTail + 1) & (M0110A_QUEUE_SIZE - 1);
+    return true;
 }
 
 void M0110AInit(void)
 {
     qHead = 0;
     qTail = 0;
+
+    // Idle: both lines high
+    WritePS2Clock(PORT_KEY, 1);
+    WritePS2Data(PORT_KEY, 1);
 }
 
 void M0110AEnqueueHidEvent(uint16_t hidcode, bool isBreak, bool isMedia)
 {
-    if (isMedia) return; // strict mode v1: ignore media page for now
+    if (isMedia) return;
     if (hidcode > 255) return;
 
-    uint8_t scan = HidToM0110AScan((uint8_t)(hidcode & 0xFF));
-    if (scan == 0xFF) return;
+    {
+        uint8_t scan = HidToM0110AScan((uint8_t)(hidcode & 0xFF));
+        uint8_t raw;
+        if (scan == 0xFF) return;
 
-    // Raw code format: bit0 always 1, bit7=release, bit6..1=scan
-    uint8_t raw = (uint8_t)((scan << 1) | 0x01);
-    if (isBreak) raw |= 0x80;
+        // bit0=1, bit7=break, bits6..1=scan
+        raw = (uint8_t)((scan << 1) | 0x01);
+        if (isBreak) raw |= 0x80;
+        enqueueRaw(raw);
+    }
+}
 
-    enqueueRaw(raw);
+typedef enum {
+    M_IDLE = 0,
+    M_RX_LOW,
+    M_RX_HIGH,
+    M_TX_PREP,
+    M_TX_LOW,
+    M_TX_HIGH,
+} m0110_state_t;
+
+static __xdata m0110_state_t mState = M_IDLE;
+static __xdata uint8_t mTicks = 0;
+static __xdata uint8_t mBit = 0;
+static __xdata uint8_t mRx = 0;
+static __xdata uint8_t mTx = 0;
+static __xdata uint8_t mReqLowTicks = 0;
+
+static void queueResponseForCommand(uint8_t cmd)
+{
+    uint8_t ev;
+    switch (cmd)
+    {
+        case M0110A_CMD_INQUIRY:
+        case M0110A_CMD_INSTANT:
+            if (dequeueRaw(&ev)) mTx = ev;
+            else mTx = M0110A_RESP_NULL;
+            break;
+
+        case M0110A_CMD_MODEL:
+            mTx = M0110A_MODEL_M0110A;
+            break;
+
+        case M0110A_CMD_TEST:
+            mTx = M0110A_RESP_TEST_ACK;
+            break;
+
+        default:
+            mTx = M0110A_RESP_TEST_NAK;
+            break;
+    }
 }
 
 void M0110AProcessPort(void)
 {
-    // Protocol engine TODO:
-    // - Host-initiated command receive (Inquiry/Instant/Model/Test)
-    // - Keyboard-driven clock timing per M0110A spec
-    // - Drain q[] and reply to Inquiry/Instant
-    //
-    // For this commit we only stage mode plumbing + event queue.
+    switch (mState)
+    {
+        case M_IDLE:
+            // Idle: both lines released high
+            WritePS2Clock(PORT_KEY, 1);
+            WritePS2Data(PORT_KEY, 1);
+
+            // Host initiates by pulling DATA low while clock remains high.
+            if (ReadPS2Clock(PORT_KEY) && !ReadPS2Data(PORT_KEY)) {
+                if (mReqLowTicks < 255) mReqLowTicks++;
+                if (mReqLowTicks >= M0110A_TICKS_160US) {
+                    mReqLowTicks = 0;
+                    mBit = 0;
+                    mRx = 0;
+                    mTicks = 0;
+                    mState = M_RX_LOW;
+                }
+            } else {
+                mReqLowTicks = 0;
+            }
+            break;
+
+        // Receive host->keyboard command byte.
+        case M_RX_LOW:
+            WritePS2Clock(PORT_KEY, 0);
+            if (++mTicks >= M0110A_TICKS_180US) {
+                mTicks = 0;
+                mState = M_RX_HIGH;
+            }
+            break;
+
+        case M_RX_HIGH:
+            WritePS2Clock(PORT_KEY, 1);
+            mTicks++;
+
+            // Sample 80us after rising edge.
+            if (mTicks == M0110A_TICKS_80US) {
+                mRx <<= 1;
+                if (ReadPS2Data(PORT_KEY)) mRx |= 1;
+            }
+
+            if (mTicks >= M0110A_TICKS_220US) {
+                mTicks = 0;
+                mBit++;
+                if (mBit >= 8) {
+                    queueResponseForCommand(mRx);
+                    mBit = 0;
+                    mState = M_TX_PREP;
+                } else {
+                    mState = M_RX_LOW;
+                }
+            }
+            break;
+
+        // Send keyboard->host response byte, MSB first.
+        case M_TX_PREP:
+        {
+            uint8_t bitVal = (uint8_t)((mTx & 0x80) ? 1 : 0);
+            WritePS2Clock(PORT_KEY, 1);
+            WritePS2Data(PORT_KEY, bitVal);
+            if (++mTicks >= M0110A_TICKS_40US) {
+                mTicks = 0;
+                mState = M_TX_LOW;
+            }
+            break;
+        }
+
+        case M_TX_LOW:
+            WritePS2Clock(PORT_KEY, 0);
+            if (++mTicks >= M0110A_TICKS_160US) {
+                mTicks = 0;
+                mState = M_TX_HIGH;
+            }
+            break;
+
+        case M_TX_HIGH:
+            WritePS2Clock(PORT_KEY, 1);
+            if (++mTicks >= M0110A_TICKS_170US) {
+                mTicks = 0;
+                mBit++;
+                mTx <<= 1;
+
+                if (mBit >= 8) {
+                    mBit = 0;
+                    WritePS2Data(PORT_KEY, 1);
+                    mState = M_IDLE;
+                } else {
+                    mState = M_TX_PREP;
+                }
+            }
+            break;
+
+        default:
+            mState = M_IDLE;
+            break;
+    }
 }
