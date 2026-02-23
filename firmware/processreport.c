@@ -501,12 +501,9 @@ bool ParseReport(__xdata INTERFACE *interface, uint32_t len, __xdata uint8_t *re
 								// media keys work different
 								// lookup a sparse table
 								if (FlashSettings->KeyboardMode == MODE_M0110A) {
+									// Keep typematic repeat host-driven in M0110A mode.
+									// Firmware repeat here can cause unwanted duplicate chars.
 									M0110AEnqueueHidEvent(hidcode, false, descReport->appUsagePage == 0x0C);
-									if (descReport->appUsagePage != 0x0C && !(hidcode >= 0xE0 && hidcode <= 0xE7))
-									{
-										RepeatKey = hidcode;
-										SetRepeatState(1);
-									}
 								}
 								else if (descReport->appUsagePage == 0x0C) {
 
