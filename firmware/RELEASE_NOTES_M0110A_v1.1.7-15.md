@@ -6,6 +6,10 @@ This release marks the M0110A mode as stable after iterative testing.
 - `firmware/build/hidman-v1.1.7-15.hex`
 - `firmware/build/hidman-v1.1.7-15.bin`
 
+## Flashing note (important)
+- In testing, the `.hex` file did **not** program successfully with **WCHISPStudio_V370**.
+- Recommended: use the `.bin` artifact when flashing with WCHISPStudio_V370.
+
 ## Implemented behavior
 
 ### Protocol and timing reliability
